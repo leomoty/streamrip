@@ -379,7 +379,8 @@ class RipCore(list):
                 for u in interpreter_urls
             )
             url = QOBUZ_INTERPRETER_URL_REGEX.sub("", url)
-
+        
+        parsed.extend(URL_REGEX.findall(url))
         logger.debug("Parsed urls: %s", parsed)
 
         return parsed
