@@ -1,7 +1,7 @@
 [downloads]
 # Folder where tracks are downloaded to
 folder = ""
-# Put Qobuz albums in a 'Qobuz' folder, Tidal albums in 'Tidal' etc.
+# Put Qobuz albums in a 'Qobuz' folder.
 source_subdirectories = false
 
 [downloads.concurrency]
@@ -30,53 +30,6 @@ password_or_token = ""
 app_id = ""
 # Do not change
 secrets = []
-
-[tidal]
-# 0: 256kbps AAC, 1: 320kbps AAC, 2: 16/44.1 "HiFi" FLAC, 3: 24/44.1 "MQA" FLAC
-quality = 3
-# This will download videos included in Video Albums.
-download_videos = true
-
-# Do not change any of the fields below
-user_id = ""
-country_code = ""
-access_token = ""
-refresh_token = ""
-# Tokens last 1 week after refresh. This is the Unix timestamp of the expiration
-# time. If you haven't used streamrip in more than a week, you may have to log
-# in again using `rip config --tidal`
-token_expiry = ""
-
-[deezer]
-# 0, 1, or 2
-# This only applies to paid Deezer subscriptions. Those using deezloader
-# are automatically limited to quality = 1
-quality = 2
-# An authentication cookie that allows streamrip to use your Deezer account
-# See https://github.com/nathom/streamrip/wiki/Finding-Your-Deezer-ARL-Cookie
-# for instructions on how to find this
-arl = ""
-# This allows for free 320kbps MP3 downloads from Deezer
-# If an arl is provided, deezloader is never used
-use_deezloader = true
-# This warns you when the paid deezer account is not logged in and rip falls
-# back to deezloader, which is unreliable
-deezloader_warnings = true
-
-[soundcloud]
-# Only 0 is available for now
-quality = 0
-# This changes periodically, so it needs to be updated
-client_id = ""
-app_version = ""
-
-[youtube]
-# Only 0 is available for now
-quality = 0
-# Download the video along with the audio
-download_videos = false
-# The path to download the videos to
-video_downloads_folder = ""
 
 # This stores a list of item IDs so that repeats are not downloaded.
 [database.downloads]
@@ -159,15 +112,6 @@ restrict_characters = false
 # Truncate the filename if it is greater than 120 characters
 # Setting this to false may cause downloads to fail on some systems
 truncate = true
-
-
-# Last.fm playlists are downloaded by searching for the titles of the tracks
-[lastfm]
-# The source on which to search for the tracks.
-source = "qobuz"
-# If no results were found with the primary source, the item is searched for 
-# on this one.
-fallback_source = "deezer"
 
 [theme]
 # Options: "dainty" or "plain"

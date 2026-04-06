@@ -18,7 +18,7 @@ from pathvalidate import sanitize_filename
 from requests.packages import urllib3
 from tqdm import tqdm
 
-from .constants import COVER_SIZES, MAX_FILES_OPEN, TIDAL_COVER_URL
+from .constants import COVER_SIZES, MAX_FILES_OPEN
 from .exceptions import FfmpegError, InvalidQuality, InvalidSourceError
 
 urllib3.disable_warnings()
@@ -119,23 +119,7 @@ __QUALITY_MAP: Dict[str, Dict[int, Union[int, str, Tuple[int, str]]]] = {
         2: 6,
         3: 7,
         4: 27,
-    },
-    "deezer": {
-        0: (9, "MP3_128"),
-        1: (3, "MP3_320"),
-        2: (1, "FLAC"),
-    },
-    "tidal": {
-        0: "LOW",  # AAC
-        1: "HIGH",  # AAC
-        2: "LOSSLESS",  # CD Quality
-        3: "HI_RES",  # MQA
-    },
-    "deezloader": {
-        0: 128,
-        1: 320,
-        2: 1411,
-    },
+    }
 }
 
 
@@ -144,7 +128,7 @@ def get_quality(quality_id: int, source: str) -> Union[str, int, Tuple[int, str]
 
     :param quality_id: the universal quality id (0, 1, 2, 4)
     :type quality_id: int
-    :param source: qobuz, tidal, or deezer
+    :param source: qobuz
     :type source: str
     :rtype: Union[str, int]
     """
@@ -224,72 +208,6 @@ def clean_format(formatter: str, format_info, restrict: bool = False):
 
     return formatter.format(**clean_dict)
 
-
-def tidal_cover_url(uuid, size):
-    """Generate a tidal cover url.
-
-    :param uuid:
-    :param size:
-    """
-    possibles = (80, 160, 320, 640, 1280)
-    assert size in possibles, f"size must be in {possibles}"
-
-    # A common occurance is a valid size but no uuid
-    if not uuid:
-        return None
-    return TIDAL_COVER_URL.format(uuid=uuid.replace("-", "/"), height=size, width=size)
-
-
-def decrypt_mqa_file(in_path, out_path, encryption_key):
-    """Decrypt an MQA file.
-
-    :param in_path:
-    :param out_path:
-    :param encryption_key:
-    """
-    try:
-        from Crypto.Cipher import AES
-        from Crypto.Util import Counter
-    except (ImportError, ModuleNotFoundError):
-        secho(
-            "To download this item in MQA, you need to run ",
-            fg="yellow",
-            nl=False,
-        )
-        secho("pip3 install pycryptodome --upgrade", fg="blue", nl=False)
-        secho(".")
-        exit()
-
-    # Do not change this
-    master_key = "UIlTTEMmmLfGowo/UC60x2H45W6MdGgTRfo/umg4754="
-
-    # Decode the base64 strings to ascii strings
-    master_key = base64.b64decode(master_key)
-    security_token = base64.b64decode(encryption_key)
-
-    # Get the IV from the first 16 bytes of the securityToken
-    iv = security_token[:16]
-    encrypted_st = security_token[16:]
-
-    # Initialize decryptor
-    decryptor = AES.new(master_key, AES.MODE_CBC, iv)
-
-    # Decrypt the security token
-    decrypted_st = decryptor.decrypt(encrypted_st)
-
-    # Get the audio stream decryption key and nonce from the decrypted security token
-    key = decrypted_st[:16]
-    nonce = decrypted_st[16:24]
-
-    counter = Counter.new(64, prefix=nonce, initial_value=0)
-    decryptor = AES.new(key, AES.MODE_CTR, counter=counter)
-
-    with open(in_path, "rb") as enc_file:
-        dec_bytes = decryptor.decrypt(enc_file.read())
-        with open(out_path, "wb") as dec_file:
-            dec_file.write(dec_bytes)
-
-
 def ext(quality: int, source: str):
     """Get the extension of an audio file.
 
@@ -299,10 +217,7 @@ def ext(quality: int, source: str):
     :type source: str
     """
     if quality <= 1:
-        if source == "tidal":
-            return ".m4a"
-        else:
-            return ".mp3"
+        return ".mp3"
     else:
         return ".flac"
 
@@ -355,9 +270,6 @@ def get_container(quality: int, source: str) -> str:
     if quality >= 2:
         return "FLAC"
 
-    if source == "tidal":
-        return "AAC"
-
     return "MP3"
 
 
@@ -374,46 +286,6 @@ def get_cover_urls(resp: dict, source: str) -> Optional[dict]:
     if source == "qobuz":
         cover_urls = resp["image"]
         cover_urls["original"] = "org".join(cover_urls["large"].rsplit('600', 1))
-        return cover_urls
-
-    if source == "tidal":
-        uuid = resp["cover"]
-        if not uuid:
-            return None
-        return {
-            sk: tidal_cover_url(uuid, size)
-            for sk, size in zip(COVER_SIZES, (160, 320, 640, 1280))
-        }
-
-    if source == "deezer":
-        resp_keys = ("cover", "cover_medium", "cover_large", "cover_xl")
-        resp_keys_fallback = (
-            "picture",
-            "picture_medium",
-            "picture_large",
-            "picture_xl",
-        )
-        cover_urls = {
-            sk: resp.get(rk, resp.get(rkf))  # size key, resp key, resp key fallback
-            for sk, rk, rkf in zip(
-                COVER_SIZES,
-                resp_keys,
-                resp_keys_fallback,
-            )
-        }
-
-        if cover_urls["large"] is None and resp.get("cover_big") is not None:
-            cover_urls["large"] = resp["cover_big"]
-
-        return cover_urls
-
-    if source == "soundcloud":
-        cover_url = (resp["artwork_url"] or resp["user"].get("avatar_url")).replace(
-            "large", "t500x500"
-        )
-
-        cover_urls = {"large": cover_url}
-
         return cover_urls
 
     raise InvalidSourceError(source)

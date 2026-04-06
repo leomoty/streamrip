@@ -75,8 +75,6 @@ class Config:
         cached_info = self._cache_info(
             [
                 "qobuz",
-                "tidal",
-                "deezer",
                 "downloads.folder",
                 "filepaths.folder_format",
                 "filepaths.track_format",
@@ -160,15 +158,6 @@ class Config:
             cfg.write(tomlkit.dumps(info))
 
     @property
-    def tidal_creds(self):
-        """Return a TidalClient compatible dict of credentials."""
-        creds = dict(self.file["tidal"])
-        logger.debug(creds)
-        del creds["quality"]  # should not be included in creds
-        del creds["download_videos"]
-        return creds
-
-    @property
     def qobuz_creds(self):
         """Return a QobuzClient compatible dict of credentials."""
         return {
@@ -187,16 +176,6 @@ class Config:
         """
         if source == "qobuz":
             return self.qobuz_creds
-        if source == "tidal":
-            return self.tidal_creds
-        if source == "deezer":
-            return {"arl": self.file["deezer"]["arl"]}
-        if source == "soundcloud":
-            soundcloud = self.file["soundcloud"]
-            return {
-                "client_id": soundcloud["client_id"],
-                "app_version": soundcloud["app_version"],
-            }
 
         raise InvalidSourceError(source)
 

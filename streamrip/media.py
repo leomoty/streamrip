@@ -28,7 +28,7 @@ from mutagen.mp4 import MP4, MP4Cover
 from pathvalidate import sanitize_filepath
 
 from . import converter
-from .clients import Client, DeezloaderClient
+from .clients import Client
 from .constants import ALBUM_KEYS, FLAC_MAX_BLOCKSIZE, FOLDER_FORMAT, TRACK_FORMAT
 from .downloadtools import DownloadPool, DownloadStream
 from .exceptions import (
@@ -44,7 +44,6 @@ from .utils import (
     clean_filename,
     clean_format,
     concat_audio_files,
-    decrypt_mqa_file,
     downsize_image,
     ext,
     get_container,
@@ -52,7 +51,6 @@ from .utils import (
     get_stats_from_quality,
     get_tqdm_bar,
     safe_get,
-    tidal_cover_url,
     tqdm_stream,
 )
 
@@ -196,8 +194,6 @@ class Track(Media):
 
     def load_meta(self, **kwargs):
         """Send a request to the client to get metadata for this Track.
-
-        Usually only called for single tracks and last.fm playlists.
         """
         assert self.id is not None, "id must be set before loading metadata"
 
@@ -278,7 +274,7 @@ class Track(Media):
         :param progress_bar: turn on/off progress bar
         :type progress_bar: bool
         """
-        if not self.part_of_tracklist and not self.client.source == "soundcloud":
+        if not self.part_of_tracklist:
             secho(f"Downloading {self!s}\n", bold=True)
 
         self._prepare_download(
@@ -288,14 +284,8 @@ class Track(Media):
             **kwargs,
         )
 
-        if self.client.source == "soundcloud":
-            # soundcloud client needs whole dict to get file url
-            url_id = self.resp
-        else:
-            url_id = self.id
-
         try:
-            dl_info = self.client.get_file_url(url_id, self.quality)
+            dl_info = self.client.get_file_url(self.id, self.quality)
         except Exception as e:
             logger.debug(repr(e))
             raise NonStreamable(e)
@@ -308,7 +298,7 @@ class Track(Media):
             self.bit_depth = dl_info.get("bit_depth")
 
         # --------- Download Track ----------
-        if self.client.source in ("qobuz", "tidal"):
+        if self.client.source in ("qobuz"):
             logger.debug("Downloadable URL found: %s", dl_info.get("url"))
             try:
                 download_url = dl_info["url"]
@@ -325,53 +315,8 @@ class Track(Media):
 
             _quick_download(download_url, self.path, desc=self._progress_desc)
 
-        elif isinstance(self.client, DeezloaderClient):
-            _quick_download(dl_info["url"], self.path, desc=self._progress_desc)
-
-        elif self.client.source == "deezer":
-            # We can only find out if the requested quality is available
-            # after the streaming request is sent for deezer
-
-            try:
-                stream = DownloadStream(
-                    dl_info["url"], source="deezer", item_id=self.id
-                )
-            except NonStreamable:
-                self.id = dl_info["fallback_id"]
-                dl_info = self.client.get_file_url(self.id, self.quality)
-                assert isinstance(dl_info, dict)
-                stream = DownloadStream(
-                    dl_info["url"], source="deezer", item_id=self.id
-                )
-
-            stream_size = len(stream)
-            stream_quality = dl_info["size_to_quality"][stream_size]
-            if self.quality != stream_quality:
-                # The chosen quality is not available
-                self.quality = stream_quality
-                self.format_final_path(
-                    restrict=kwargs.get("restrict_filenames", False)
-                )  # If the extension is different
-
-            with open(self.path, "wb") as file:
-                for chunk in tqdm_stream(stream, desc=self._progress_desc):
-                    file.write(chunk)
-
-        elif self.client.source == "soundcloud":
-            self._soundcloud_download(dl_info)
-
         else:
             raise InvalidSourceError(self.client.source)
-
-        if (
-            self.client.source == "tidal"
-            and isinstance(dl_info, dict)
-            and dl_info.get("enc_key", False)
-        ):
-            out_path = f"{self.path}_dec"
-            logger.debug("Decrypting MQA file")
-            decrypt_mqa_file(self.path, out_path, dl_info["enc_key"])
-            self.path = out_path
 
         if not kwargs.get("stay_temp", False):
             self.move(self.final_path)
@@ -415,52 +360,6 @@ class Track(Media):
             shutil.move(self.path, path)
 
         self.path = path
-
-    def _soundcloud_download(self, dl_info: dict):
-        """Download a soundcloud track.
-
-        This requires a seperate function because there are three methods that
-        can be used to download a track:
-            * original file downloads
-            * direct mp3 downloads
-            * hls stream ripping
-        All three of these need special processing.
-
-        :param dl_info:
-        :type dl_info: dict
-        :rtype: str
-        """
-        # logger.debug("dl_info: %s", dl_info)
-        if dl_info["type"] == "mp3":
-            import m3u8
-            import requests
-
-            parsed_m3u = m3u8.loads(
-                requests.get(dl_info["url"]).content.decode("utf-8")
-            )
-            self.path += ".mp3"
-
-            with DownloadPool(segment.uri for segment in parsed_m3u.segments) as pool:
-
-                bar = get_tqdm_bar(len(pool), desc=self._progress_desc, unit="Chunk")
-
-                def update_tqdm_bar():
-                    bar.update(1)
-
-                pool.download(callback=update_tqdm_bar)
-
-                concat_audio_files(pool.files, self.path, "mp3")
-
-        elif dl_info["type"] == "original":
-            _quick_download(dl_info["url"], self.path, desc=self._progress_desc)
-
-            # if a wav is returned, convert to flac
-            engine = converter.FLAC(self.path)
-            self.path = f"{self.path}.flac"
-            engine.convert(custom_fn=self.path)
-
-            self.final_path = self.final_path.replace(".mp3", ".flac")
-            self.quality = 2
 
     @property
     def type(self) -> str:
@@ -541,15 +440,6 @@ class Track(Media):
         try:
             if client.source == "qobuz":
                 cover_url = item["album"]["image"]["large"]
-            elif client.source == "tidal":
-                cover_url = tidal_cover_url(item["album"]["cover"], 640)
-            elif client.source == "deezer":
-                cover_url = item["album"]["cover_big"]
-            elif client.source == "soundcloud":
-                if (small_url := item["artwork_url"]) is not None:
-                    cover_url = small_url.replace("large", "t500x500")
-                else:
-                    raise KeyError
             else:
                 raise InvalidSourceError(client.source)
 
@@ -621,15 +511,11 @@ class Track(Media):
                 logger.debug("Tagging file with %s container", self.container)
                 audio = FLAC(self.path)
             elif self.quality <= 1:
-                if self.client.source == "tidal":
-                    self.container = "AAC"
-                    audio = MP4(self.path)
-                else:
-                    self.container = "MP3"
-                    try:
-                        audio = ID3(self.path)
-                    except ID3NoHeaderError:
-                        audio = ID3()
+                self.container = "MP3"
+                try:
+                    audio = ID3(self.path)
+                except ID3NoHeaderError:
+                    audio = ID3()
 
                 logger.debug("Tagging file with %s container", self.container)
             else:
@@ -803,286 +689,6 @@ class Track(Media):
         """Return True."""
         return True
 
-
-class Video(Media):
-    """Only for Tidal."""
-
-    id = None
-    downloaded_ids: set = set()
-
-    def __init__(self, client: Client, id: str, **kwargs):
-        """Initialize a Video object.
-
-        :param client:
-        :type client: Client
-        :param id: The TIDAL Video ID
-        :type id: str
-        :param kwargs: title, explicit, and tracknumber
-        """
-        self.id = id
-        self.client = client
-
-    def load_meta(self, **kwargs):
-        """Given an id at contruction, get the metadata of the video."""
-        resp = self.client.get(self.id, "video")
-        self.title = resp["title"]
-        self.explicit = resp["explicit"]
-        self.tracknumber = resp["trackNumber"]
-
-    def download(self, **kwargs):
-        """Download the Video.
-
-        :param kwargs:
-        """
-
-        if not kwargs.get("download_videos", True):
-            return
-
-        import m3u8
-        import requests
-
-        # secho(
-        #     f"Downloading {self.title} (Video). This may take a while.",
-        #     fg="blue",
-        # )
-
-        self.parent_folder = kwargs.get("parent_folder", "StreamripDownloads")
-        url = self.client.get_file_url(self.id, video=True)
-
-        parsed_m3u = m3u8.loads(requests.get(url).text)
-        # Asynchronously download the streams
-
-        with DownloadPool(segment.uri for segment in parsed_m3u.segments) as pool:
-            bar = get_tqdm_bar(len(pool), desc=self._progress_desc, unit="Chunk")
-
-            def update_tqdm_bar():
-                bar.update(1)
-
-            pool.download(callback=update_tqdm_bar)
-
-            # Put the filenames in a tempfile that ffmpeg
-            # can read from
-            file_list_path = os.path.join(gettempdir(), "__streamrip_video_files")
-            with open(file_list_path, "w") as file_list:
-                text = "\n".join(f"file '{path}'" for path in pool.files)
-                file_list.write(text)
-
-            # Use ffmpeg to concat the files
-            subprocess.call(
-                (
-                    "ffmpeg",
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                    file_list_path,
-                    "-c",
-                    "copy",
-                    "-loglevel",
-                    "panic",
-                    self.path,
-                )
-            )
-
-            os.remove(file_list_path)
-
-    def tag(self, *args, **kwargs):
-        """Return False.
-
-        This is a dummy method.
-
-        :param args:
-        :param kwargs:
-        """
-        return False
-
-    @classmethod
-    def from_album_meta(cls, track: dict, client: Client):
-        """Return a new Video object given an album API response.
-
-        :param track: track dict from album
-        :type track: dict
-        :param client:
-        :type client: Client
-        """
-        return cls(
-            client,
-            id=track["id"],
-            title=track["title"],
-            explicit=track["explicit"],
-            tracknumber=track["trackNumber"],
-        )
-
-    def convert(self, *args, **kwargs):
-        """Return None.
-
-        Dummy method.
-
-        :param args:
-        :param kwargs:
-        """
-        pass
-
-    @property
-    def _progress_desc(self) -> str:
-        return style(f"Video {self.tracknumber:02}", fg="blue")
-
-    @property
-    def path(self) -> str:
-        """Get path to download the mp4 file.
-
-        :rtype: str
-        """
-        os.makedirs(self.parent_folder, exist_ok=True)
-        fname = self.title
-        if self.explicit:
-            fname = f"{fname} (Explicit)"
-        if self.tracknumber is not None:
-            fname = f"{self.tracknumber:02}. {fname}"
-
-        return os.path.join(self.parent_folder, f"{fname}.mp4")
-
-    @property
-    def type(self) -> str:
-        """Return "video".
-
-        :rtype: str
-        """
-        return "video"
-
-    def __str__(self) -> str:
-        """Return the title.
-
-        :rtype: str
-        """
-        return self.title
-
-    def __repr__(self) -> str:
-        """Return a string representation of self.
-
-        :rtype: str
-        """
-        return f"<Video - {self.title}>"
-
-    def __bool__(self):
-        """Return True."""
-        return True
-
-
-class YoutubeVideo(Media):
-    """Dummy class implemented for consistency with the Media API."""
-
-    id = None
-    downloaded_ids = set()
-
-    class DummyClient:
-        """Used because YouTube downloads use youtube-dl, not a client."""
-
-        source = "youtube"
-
-    def __init__(self, url: str):
-        """Create a YoutubeVideo object.
-
-        :param url: URL to the youtube video.
-        :type url: str
-        """
-        self.id = url
-        self.client = self.DummyClient()
-
-    def download(
-        self,
-        parent_folder: str = "StreamripDownloads",
-        download_youtube_videos: bool = False,
-        youtube_video_downloads_folder: str = "StreamripDownloads",
-        **kwargs,
-    ):
-        """Download the video using 'youtube-dl'.
-
-        :param parent_folder:
-        :type parent_folder: str
-        :param download_youtube_videos: True if the video should be downloaded.
-        :type download_youtube_videos: bool
-        :param youtube_video_downloads_folder: Folder to put videos if
-        downloaded.
-        :type youtube_video_downloads_folder: str
-        :param kwargs:
-        """
-        secho(f"Downloading url {self.id}", fg="blue")
-        filename_formatter = "%(track_number)s.%(track)s.%(container)s"
-        filename = os.path.join(parent_folder, filename_formatter)
-
-        assert isinstance(self.id, str)
-        p = subprocess.Popen(
-            [
-                "youtube-dl",
-                "-x",  # audio only
-                "-q",  # quiet mode
-                "--add-metadata",
-                "--audio-format",
-                "mp3",
-                "--embed-thumbnail",
-                "-o",
-                filename,
-                self.id,
-            ]
-        )
-
-        if download_youtube_videos:
-            secho("Downloading video stream", fg="blue")
-            pv = subprocess.Popen(
-                [
-                    "youtube-dl",
-                    "-q",
-                    "-o",
-                    os.path.join(
-                        youtube_video_downloads_folder,
-                        "%(title)s.%(container)s",
-                    ),
-                    self.id,
-                ]
-            )
-            pv.wait()
-        p.wait()
-        self.downloaded_ids.add(self.id)
-
-    def load_meta(self, *args, **kwargs):
-        """Return None.
-
-        Dummy method.
-
-        :param args:
-        :param kwargs:
-        """
-        pass
-
-    def tag(self, *args, **kwargs):
-        """Return None.
-
-        Dummy method.
-
-        :param args:
-        :param kwargs:
-        """
-        pass
-
-    def convert(self, *args, **kwargs):
-        raise NotImplementedError
-
-    def type(self):
-        return "youtubevideo"
-
-    def __repr__(self, *args, **kwargs):
-        return f"YoutubeVideo({self.url})"
-
-    def __str__(self):
-        return repr(self)
-
-    def __bool__(self):
-        """Return True."""
-        return True
-
-
 class Booklet:
     """Only for Qobuz."""
 
@@ -1187,10 +793,6 @@ class Tracklist(list):
 
         else:
             for item in self:
-                if self.client.source != "soundcloud":
-                    # soundcloud only gets metadata after `target` is called
-                    # message will be printed in `target`
-                    secho(f'\nDownloading "{item!s}"', bold=True, fg="green")
                 try:
                     target(item, **kwargs)
                 except ItemExists:
@@ -1283,7 +885,7 @@ class Tracklist(list):
 
         :param resp: response dict
         :type resp: dict
-        :param source: in ('qobuz', 'deezer', 'tidal')
+        :param source: in ('qobuz')
         :type source: str
         """
         info = cls._parse_get_resp(item, client=client)
@@ -1474,8 +1076,6 @@ class Album(Tracklist, Media):
         :param client:
         :type client: Client
         """
-        if client.source == "soundcloud":
-            return Playlist.from_api(resp, client)
 
         info = cls._parse_get_resp(resp, client)
         return cls(client, **info.asdict())
@@ -1572,7 +1172,6 @@ class Album(Tracklist, Media):
         item.download(quality=min(self.quality, quality), **kwargs)
 
         logger.debug("tagging tracks")
-        # deezer tracks come tagged
         if kwargs.get("tag_tracks", True):
             item.tag(
                 cover=self.cover_obj,
@@ -1602,15 +1201,11 @@ class Album(Tracklist, Media):
         """
         logging.debug("Loading %d tracks to album", self.tracktotal)
         for track in _get_tracklist(resp, self.client.source):
-            if track.get("type") == "Music Video":
-                if download_videos:
-                    self.append(Video.from_album_meta(track, self.client))
-            else:
-                self.append(
-                    Track.from_album_meta(
-                        album=self.meta, track=track, client=self.client
-                    )
+            self.append(
+                Track.from_album_meta(
+                    album=self.meta, track=track, client=self.client
                 )
+            )
 
     def _get_formatter(self) -> dict:
         """Get a formatter that is used for naming folders and previews.
@@ -1791,62 +1386,28 @@ class Playlist(Tracklist, Media):
             def meta_args(track):
                 return {"track": track, "album": track["album"]}
 
-        elif self.client.source == "tidal":
-            self.name = self.meta["title"]
-            self.image = tidal_cover_url(
-                self.meta["image"] or self.meta["squareImage"], 640
-            )
-            self.creator = safe_get(self.meta, "creator", "name", default="TIDAL")
-
-            tracklist = self.meta["tracks"]
-
-            def meta_args(track):
-                return {
-                    "track": track,
-                    "source": self.client.source,
-                }
-
-        elif self.client.source == "deezer":
-            self.name = self.meta["title"]
-            self.image = self.meta["picture_big"]
-            self.creator = safe_get(self.meta, "creator", "name", default="Deezer")
-
-            tracklist = self.meta["tracks"]
-
-        elif self.client.source == "soundcloud":
-            self.name = self.meta["title"]
-            # self.image = self.meta.get("artwork_url").replace("large", "t500x500")
-            self.creator = self.meta["user"]["username"]
-            tracklist = self.meta["tracks"]
-
         else:
             raise NotImplementedError
 
         self.tracktotal = len(tracklist)
-        if self.client.source == "soundcloud":
-            # No meta is included in soundcloud playlist
-            # response, so it is loaded at download time
-            for track in tracklist:
-                self.append(Track(self.client, id=track["id"]))
-        else:
-            for track in tracklist:
-                meta = TrackMetadata(track=track, source=self.client.source)
-                cover_urls = get_cover_urls(track["album"], self.client.source)
-                cover_url = (
-                    cover_urls[kwargs.get("embed_cover_size", "large")]
-                    if cover_urls is not None
-                    else None
-                )
+        for track in tracklist:
+            meta = TrackMetadata(track=track, source=self.client.source)
+            cover_urls = get_cover_urls(track["album"], self.client.source)
+            cover_url = (
+                cover_urls[kwargs.get("embed_cover_size", "large")]
+                if cover_urls is not None
+                else None
+            )
 
-                self.append(
-                    Track(
-                        self.client,
-                        id=track.get("id"),
-                        meta=meta,
-                        cover_url=cover_url,
-                        part_of_tracklist=True,
-                    )
+            self.append(
+                Track(
+                    self.client,
+                    id=track.get("id"),
+                    meta=meta,
+                    cover_url=cover_url,
+                    part_of_tracklist=True,
                 )
+            )
 
         logger.debug("Loaded %d tracks from playlist %s", len(self), self.name)
 
@@ -1866,8 +1427,6 @@ class Playlist(Tracklist, Media):
         assert isinstance(item, Track)
 
         kwargs["parent_folder"] = self.folder
-        if self.client.source == "soundcloud":
-            item.load_meta()
 
         if kwargs.get("set_playlist_to_album", False):
             item.meta.album = self.name
@@ -1899,24 +1458,6 @@ class Playlist(Tracklist, Media):
             return {
                 "name": item["name"],
                 "id": item["id"],
-            }
-        elif client.source == "tidal":
-            return {
-                "name": item["title"],
-                "id": item["uuid"],
-            }
-        elif client.source == "deezer":
-            return {
-                "name": item["title"],
-                "id": item["id"],
-            }
-        elif client.source == "soundcloud":
-            return {
-                "name": item["title"],
-                "id": item["permalink_url"],
-                "description": item["description"],
-                "popularity": f"{item['likes_count']} likes",
-                "tracktotal": len(item["tracks"]),
             }
 
         raise InvalidSourceError(client.source)
@@ -2006,14 +1547,6 @@ class Artist(Tracklist, Media):
             self.name = self.meta["name"]
             albums = self.meta["albums"]["items"]
 
-        elif self.client.source == "tidal":
-            self.name = self.meta["name"]
-            albums = self.meta["albums"]
-
-        elif self.client.source == "deezer":
-            self.name = self.meta["name"]
-            albums = self.meta["albums"]
-
         else:
             raise InvalidSourceError(self.client.source)
 
@@ -2102,11 +1635,11 @@ class Artist(Tracklist, Media):
 
     @classmethod
     def from_api(cls, item: dict, client: Client, source: str = "qobuz"):
-        """Create an Artist object from the api response of Qobuz, Tidal, or Deezer.
+        """Create an Artist object from the api response of Qobuz.
 
         :param resp: response dict
         :type resp: dict
-        :param source: in ('qobuz', 'deezer', 'tidal')
+        :param source: in ('qobuz')
         :type source: str
         """
         logging.debug("Loading item from API")
@@ -2124,15 +1657,10 @@ class Artist(Tracklist, Media):
         :param client:
         :type client: Client
         """
-        if client.source in ("qobuz", "deezer"):
+        if client.source in ("qobuz"):
             info = {
                 "name": item.get("name"),
                 "id": item.get("id"),
-            }
-        elif client.source == "tidal":
-            info = {
-                "name": item["name"],
-                "id": item["id"],
             }
         else:
             raise InvalidSourceError(client.source)
@@ -2290,8 +1818,6 @@ def _get_tracklist(resp: dict, source: str) -> list:
     """
     if source == "qobuz":
         return resp["tracks"]["items"]
-    if source in ("tidal", "deezer"):
-        return resp["tracks"]
 
     raise NotImplementedError(source)
 

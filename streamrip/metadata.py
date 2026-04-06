@@ -14,7 +14,6 @@ from .constants import (
     MP3_KEY,
     MP4_KEY,
     PHON_COPYRIGHT,
-    TIDAL_Q_MAP,
     TRACK_KEYS,
 )
 from .exceptions import InvalidContainerError, InvalidSourceError
@@ -167,57 +166,6 @@ class TrackMetadata:
             if self.sampling_rate is not None:
                 self.sampling_rate *= 1000
 
-        elif self.__source == "tidal":
-            self.album = resp.get("title", "Unknown Album")
-            self.tracktotal = resp.get("numberOfTracks", 1)
-            # genre not returned by API
-            self.date = resp.get("releaseDate")
-
-            self.copyright = resp.get("copyright")
-
-            if artists := resp.get("artists"):
-                self.albumartist = ", ".join(a["name"] for a in artists)
-            else:
-                self.albumartist = safe_get(resp, "artist", "name")
-
-            self.disctotal = resp.get("numberOfVolumes", 1)
-            self.isrc = resp.get("isrc")
-            # label not returned by API
-
-            # non-embedded
-            self.explicit = resp.get("explicit", False)
-            # 80, 160, 320, 640, 1280
-            self.cover_urls = get_cover_urls(resp, self.__source)
-            self.streamable = resp.get("allowStreaming", False)
-            self.id = resp.get("id")
-
-            if q := resp.get("audioQuality"):  # for album entries in single tracks
-                self._get_tidal_quality(q)
-
-        elif self.__source == "deezer":
-            self.album = resp.get("title", "Unknown Album")
-            self.tracktotal = resp.get("track_total", 0) or resp.get("nb_tracks", 0)
-            self.disctotal = (
-                max(track.get("disk_number") for track in resp.get("tracks", [{}])) or 1
-            )
-            self.genre = safe_get(resp, "genres", "data")
-            self.date = resp.get("release_date")
-            self.albumartist = safe_get(resp, "artist", "name")
-            self.label = resp.get("label")
-            self.url = resp.get("link")
-            self.explicit = resp.get("parental_warning", False)
-
-            # not embedded
-            self.quality = 2
-            self.bit_depth = 16
-            self.sampling_rate = 44100
-
-            self.cover_urls = get_cover_urls(resp, self.__source)
-            self.streamable = True
-            self.id = resp.get("id")
-
-        elif self.__source == "soundcloud":
-            raise NotImplementedError
         else:
             raise InvalidSourceError(self.__source)
 
@@ -234,35 +182,6 @@ class TrackMetadata:
             self.tracknumber = track.get("track_number", 1)
             self.discnumber = track.get("media_number", 1)
             self.artist = safe_get(track, "performer", "name")
-
-        elif self.__source == "tidal":
-            self.title = track["title"].strip()
-            self._mod_title(track.get("version"), None)
-            self.tracknumber = track.get("trackNumber", 1)
-            self.discnumber = track.get("volumeNumber", 1)
-            self.artist = track.get("artist", {}).get("name")
-            self._get_tidal_quality(track["audioQuality"])
-
-        elif self.__source == "deezer":
-            self.title = track["title"].strip()
-            self._mod_title(track.get("version"), None)
-            self.tracknumber = track.get("track_position", 1)
-            self.discnumber = track.get("disk_number", 1)
-            self.artist = safe_get(track, "artist", "name")
-
-        elif self.__source == "soundcloud":
-            self.title = track["title"].strip()
-            self.genre = track["genre"]
-            self.artist = self.albumartist = track["user"]["username"]
-            self.year = track["created_at"][:4]
-            self.label = track["label_name"]
-            self.description = track["description"]
-            self.album = safe_get(track, "publisher_metadata", "album_title")
-            self.copyright = safe_get(track, "publisher_metadata", "p_line")
-            self.tracknumber = 0
-            self.tracktotal = 0
-            self.quality = 0
-            self.cover_urls = get_cover_urls(track, "soundcloud")
 
         else:
             raise ValueError(self.__source)
@@ -283,12 +202,6 @@ class TrackMetadata:
         if work is not None and work not in self.title:
             logger.debug("Work found: %s", work)
             self.title = f"{work}: {self.title}"
-
-    def _get_tidal_quality(self, q: str):
-        self.quality = TIDAL_Q_MAP[q]
-        if self.quality >= 2:
-            self.bit_depth = 24 if self.get("quality") == 3 else 16
-            self.sampling_rate = 44100
 
     @property
     def title(self) -> Optional[str]:
@@ -373,8 +286,6 @@ class TrackMetadata:
             if self.__source == "qobuz":
                 genres: Iterable = re.findall(r"([^\u2192\/]+)", "/".join(self._genres))
                 genres = set(genres)
-            elif self.__source == "deezer":
-                genres = (g["name"] for g in self._genres)
             else:
                 raise Exception
 

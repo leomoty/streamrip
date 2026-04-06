@@ -30,7 +30,7 @@ class DownloadCommand(Command):
     arguments = [
         argument(
             "urls",
-            "One or more Qobuz, Tidal, Deezer, or SoundCloud urls",
+            "One or more Qobuz urls",
             optional=True,
             multiple=True,
         )
@@ -68,7 +68,7 @@ class DownloadCommand(Command):
 
     help = (
         "\nDownload <title>Dreams</title> by <title>Fleetwood Mac</title>:\n"
-        "$ <cmd>rip url https://www.deezer.com/us/track/67549262</cmd>\n\n"
+        "$ <cmd>rip url https://play.qobuz.com/album/5099969390852</cmd>\n\n"
         "Batch download urls from a text file named <path>urls.txt</path>:\n"
         "$ <cmd>rip url --file urls.txt</cmd>\n\n"
         "For more information on Quality IDs, see\n"
@@ -76,13 +76,6 @@ class DownloadCommand(Command):
     )
 
     def handle(self):
-        global outdated
-        global newest_version
-
-        # Use a thread so that it doesn't slow down startup
-        #update_check = threading.Thread(target=is_outdated, daemon=True)
-        #update_check.start()
-
         path, quality, no_db, directory, config = clean_options(
             self.option("file"),
             self.option("max-quality"),
@@ -101,7 +94,7 @@ class DownloadCommand(Command):
             config.session["database"]["enabled"] = False
 
         if quality is not None:
-            for source in ("qobuz", "tidal", "deezer"):
+            for source in ("qobuz"):
                 config.session[source]["quality"] = quality
 
         core = RipCore(config)
@@ -126,33 +119,6 @@ class DownloadCommand(Command):
         elif not urls and path is None:
             self.line("<error>Must pass arguments. See </><cmd>rip url -h</cmd>.")
 
-        #update_check.join()
-
-        # if outdated:
-        #     import re
-
-        #     self.line(
-        #         f"\n<info>A new version of streamrip <title>v{newest_version}</title>"
-        #         " is available! Run <cmd>pip3 install streamrip --upgrade</cmd>"
-        #         " to update.</info>\n"
-        #     )
-
-        #     md_header = re.compile(r"#\s+(.+)")
-        #     bullet_point = re.compile(r"-\s+(.+)")
-        #     code = re.compile(r"`([^`]+)`")
-        #     issue_reference = re.compile(r"(#\d+)")
-
-        #     release_notes = requests.get(
-        #         "https://api.github.com/repos/nathom/streamrip/releases/latest"
-        #     ).json()["body"]
-
-        #     release_notes = md_header.sub(r"<header>\1</header>", release_notes)
-        #     release_notes = bullet_point.sub(r"<options=bold>•</> \1", release_notes)
-        #     release_notes = code.sub(r"<cmd>\1</cmd>", release_notes)
-        #     release_notes = issue_reference.sub(r"<options=bold>\1</>", release_notes)
-
-        #     self.line(release_notes)
-
         return 0
 
 
@@ -171,7 +137,7 @@ class SearchCommand(Command):
         option(
             "source",
             "-s",
-            "Qobuz, Tidal, Soundcloud, Deezer, or Deezloader",
+            "Qobuz",
             flag=False,
             default="qobuz",
         ),
@@ -187,10 +153,10 @@ class SearchCommand(Command):
     help = (
         "\nSearch for <title>Rumours</title> by <title>Fleetwood Mac</title>\n"
         "$ <cmd>rip search 'rumours fleetwood mac'</cmd>\n\n"
-        "Search for <title>444</title> by <title>Jay-Z</title> on TIDAL\n"
-        "$ <cmd>rip search --source tidal '444'</cmd>\n\n"
-        "Search for <title>Bob Dylan</title> on Deezer\n"
-        "$ <cmd>rip search --type artist --source deezer 'bob dylan'</cmd>\n"
+        "Search for <title>444</title> by <title>Jay-Z</title> on Qobuz\n"
+        "$ <cmd>rip search --source qobuz '444'</cmd>\n\n"
+        "Search for <title>Bob Dylan</title> on Qobuz\n"
+        "$ <cmd>rip search --type artist --source qobyz 'bob dylan'</cmd>\n"
     )
 
     def handle(self):
@@ -235,7 +201,7 @@ class DiscoverCommand(Command):
         option(
             "source",
             "-s",
-            description="The source to download from (<cmd>qobuz</cmd> or <cmd>deezer</cmd>)",
+            description="The source to download from (<cmd>qobuz</cmd>)",
             flag=False,
             default="qobuz",
         ),
@@ -261,14 +227,6 @@ class DiscoverCommand(Command):
         "    • universal-jazz\n"
         "    • universal-jeunesse\n"
         "    • universal-chanson\n\n"
-        "Browse the Deezer editorial releases list\n"
-        "$ <cmd>rip discover --source deezer</cmd>\n\n"
-        "Browse the Deezer charts\n"
-        "$ <cmd>rip discover --source deezer charts</cmd>\n\n"
-        "Available options for Deezer <cmd>list</cmd>:\n\n"
-        "    • releases\n"
-        "    • charts\n"
-        "    • selection\n"
     )
 
     def handle(self):
@@ -284,17 +242,10 @@ class DiscoverCommand(Command):
                 self.line(f'<error>Error: list "{chosen_list}" not available</error>')
                 self.line(self.help)
                 return 1
-        elif source == "deezer":
-            from streamrip.constants import DEEZER_FEATURED_KEYS
-
-            if chosen_list not in DEEZER_FEATURED_KEYS:
-                self.line(f'<error>Error: list "{chosen_list}" not available</error>')
-                self.line(self.help)
-                return 1
 
         else:
             self.line(
-                "<error>Invalid source. Choose either <cmd>qobuz</cmd> or <cmd>deezer</cmd></error>"
+                "<error>Invalid source.</error>"
             )
             return 1
 
@@ -314,49 +265,6 @@ class DiscoverCommand(Command):
             self.line("<error>No items chosen, exiting.</error>")
 
         return 0
-
-
-class LastfmCommand(Command):
-    name = "lastfm"
-    description = "Search for tracks from a last.fm playlist and download them."
-
-    arguments = [
-        argument(
-            "urls",
-            "Last.fm playlist urls",
-            optional=False,
-            multiple=True,
-        )
-    ]
-    options = [
-        option(
-            "source",
-            "-s",
-            description="The source to search for items on",
-            flag=False,
-            default="qobuz",
-        ),
-    ]
-    help = (
-        "You can use this command to download Spotify, Apple Music, and YouTube "
-        "playlists.\nTo get started, create an account at "
-        "<url>https://www.last.fm</url>. Once you have\nreached the home page, "
-        "go to <path>Profile Icon</path> => <path>View profile</path> => "
-        "<path>Playlists</path> => <path>IMPORT</path>\nand paste your url.\n\n"
-        "Download the <info>young & free</info> Apple Music playlist (already imported)\n"
-        "$ <cmd>rip lastfm https://www.last.fm/user/nathan3895/playlists/12089888</cmd>\n"
-    )
-
-    def handle(self):
-        source = self.option("source")
-        urls = self.argument("urls")
-
-        config = Config()
-        core = RipCore(config)
-        config.session["lastfm"]["source"] = source
-        core.handle_lastfm_urls(";".join(urls))
-        core.download()
-
 
 class ConfigCommand(Command):
     name = "config"
@@ -383,8 +291,6 @@ class ConfigCommand(Command):
         ),
         option("path", "-p", description="Show the config file's path", flag=True),
         option("qobuz", description="Set the credentials for Qobuz", flag=True),
-        option("tidal", description="Log into Tidal", flag=True),
-        option("deezer", description="Set the Deezer ARL", flag=True),
         option(
             "music-app",
             description="Configure the config file for usage with the macOS Music App",
@@ -406,8 +312,6 @@ class ConfigCommand(Command):
         {--d|directory : Open the directory that the config file is located in}
         {--p|path : Show the config file's path}
         {--qobuz : Set the credentials for Qobuz}
-        {--tidal : Log into Tidal}
-        {--deezer : Set the Deezer ARL}
         {--music-app : Configure the config file for usage with the macOS Music App}
         {--reset : Reset the config file}
         {--update : Reset the config file, keeping the credentials}
@@ -444,36 +348,6 @@ class ConfigCommand(Command):
         if self.option("directory"):
             self.line(f"Opening <url>{CONFIG_DIR}</url>")
             launch(CONFIG_DIR)
-
-        if self.option("tidal"):
-            from streamrip.clients import TidalClient
-
-            client = TidalClient()
-            client.login()
-            self._config.file["tidal"].update(client.get_tokens())
-            self._config.save()
-            self.line("<info>Credentials saved to config.</info>")
-
-        if self.option("deezer"):
-            from streamrip.clients import DeezerClient
-            from streamrip.exceptions import AuthenticationError
-
-            self.line(
-                "Follow the instructions at <url>https://github.com"
-                "/nathom/streamrip/wiki/Finding-your-Deezer-ARL-Cookie</url>"
-            )
-
-            given_arl = self.ask("Paste your ARL here: ").strip()
-            self.line("<comment>Validating arl...</comment>")
-
-            try:
-                DeezerClient().login(arl=given_arl)
-                self._config.file["deezer"]["arl"] = given_arl
-                self._config.save()
-                self.line("<b>Sucessfully logged in!</b>")
-
-            except AuthenticationError:
-                self.line("<error>Could not log in. Double check your ARL</error>")
 
         if self.option("qobuz"):
             import getpass
@@ -796,8 +670,7 @@ class Application(BaseApplication):
     def render_error(self, error, io):
         super().render_error(error, io)
         io.write_line(
-            "\n<error>If this was unexpected, please open a <path>Bug Report</path> at </error>"
-            "<url>https://github.com/nathom/streamrip/issues/new/choose</url>"
+            "\n<error>If this was unexpected, please open a <path>Bug Report</path></error>"
         )
 
 
@@ -816,29 +689,11 @@ def clean_options(*opts):
         yield opt
 
 
-def is_outdated():
-    global outdated
-    global newest_version
-    r = requests.get("https://pypi.org/pypi/streamrip/json").json()
-    newest_version = r["info"]["version"]
-
-    # Compare versions
-    curr_version_parsed = map(int, __version__.split("."))
-    assert isinstance(newest_version, str)
-    newest_version_parsed = map(int, newest_version.split("."))
-    outdated = False
-    for c, n in zip(curr_version_parsed, newest_version_parsed):
-        outdated = c < n
-        if c != n:
-            break
-
-
 def main():
     application = Application()
     application.add(DownloadCommand())
     application.add(SearchCommand())
     application.add(DiscoverCommand())
-    application.add(LastfmCommand())
     application.add(ConfigCommand())
     application.add(ConvertCommand())
     application.add(RepairCommand())

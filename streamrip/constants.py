@@ -6,15 +6,6 @@ import mutagen.id3 as id3
 
 AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:83.0) Gecko/20100101 Firefox/83.0"
 
-TIDAL_COVER_URL = "https://resources.tidal.com/images/{uuid}/{width}x{height}.jpg"
-# Get this from (base64encoded)
-# aHR0cHM6Ly9hLXYyLnNuZGNkbi5jb20vYXNzZXRzLzItYWIxYjg1NjguanM=
-# Don't know if this is a static url yet
-SOUNDCLOUD_CLIENT_ID = "qHsjZaNbdTcABbiIQnVfW07cEPGLNjIh"
-SOUNDCLOUD_USER_ID = "672320-86895-162383-801513"
-SOUNDCLOUD_APP_VERSION = "1630917744"
-
-
 QUALITY_DESC = {
     0: "128kbps",
     1: "320kbps",
@@ -148,48 +139,12 @@ FOLDER_FORMAT = (
 )
 TRACK_FORMAT = "{tracknumber}. {artist} - {title}"
 
-
-TIDAL_MAX_Q = 7
-
-TIDAL_Q_MAP = {
-    "LOW": 0,
-    "HIGH": 1,
-    "LOSSLESS": 2,
-    "HI_RES": 3,
-}
-
-DEEZER_MAX_Q = 6
-DEEZER_FEATURED_KEYS = {"releases", "charts", "selection"}
 AVAILABLE_QUALITY_IDS = (0, 1, 2, 3, 4)
-DEEZER_FORMATS = {
-    "AAC_64",
-    "MP3_64",
-    "MP3_128",
-    "MP3_256",
-    "MP3_320",
-    "FLAC",
-}
-# video only for tidal
-MEDIA_TYPES = {"track", "album", "artist", "label", "playlist", "video"}
+MEDIA_TYPES = {"track", "album", "artist", "label", "playlist"}
 
 # used to homogenize cover size keys
 COVER_SIZES = ("thumbnail", "small", "large", "original")
 
-TIDAL_CLIENT_INFO = {
-    "id": base64.b64decode("elU0WEhWVmtjMnREUG80dA==").decode("iso-8859-1"),
-    "secret": base64.b64decode(
-        "VkpLaERGcUpQcXZzUFZOQlY2dWtYVEptd2x2YnR0UDd3bE1scmM3MnNlND0="
-    ).decode("iso-8859-1"),
-}
-
 QOBUZ_BASE = "https://www.qobuz.com/api.json/0.2"
-
-TIDAL_BASE = "https://api.tidalhifi.com/v1"
-TIDAL_AUTH_URL = "https://auth.tidal.com/v1/oauth2"
-
-DEEZER_BASE = "https://api.deezer.com"
-DEEZER_DL = "http://dz.loaderapp.info/deezer"
-
-SOUNDCLOUD_BASE = "https://api-v2.soundcloud.com"
 
 MAX_FILES_OPEN = 128

@@ -17,11 +17,7 @@ from tqdm import tqdm
 
 from streamrip.clients import (
     Client,
-    DeezerClient,
-    DeezloaderClient,
     QobuzClient,
-    SoundCloudClient,
-    TidalClient,
 )
 from streamrip.constants import MEDIA_TYPES
 from streamrip.exceptions import (
@@ -41,8 +37,6 @@ from streamrip.media import (
     Playlist,
     Track,
     Tracklist,
-    Video,
-    YoutubeVideo,
 )
 from streamrip.utils import TQDM_DEFAULT_THEME, set_progress_bar_theme
 
@@ -51,16 +45,11 @@ from .config import Config
 from .constants import (
     CONFIG_PATH,
     DB_PATH,
-    DEEZER_DYNAMIC_LINK_REGEX,
     FAILED_DB_PATH,
-    LASTFM_URL_REGEX,
     QOBUZ_INTERPRETER_URL_REGEX,
-    SOUNDCLOUD_URL_REGEX,
     URL_REGEX,
-    YOUTUBE_URL_REGEX,
 )
-from .exceptions import DeezloaderFallback
-from .utils import extract_deezer_dynamic_link, extract_interpreter_url
+from .utils import extract_interpreter_url
 
 logger = logging.getLogger("streamrip")
 
@@ -71,7 +60,6 @@ Media = Union[
     Type[Artist],
     Type[Track],
     Type[Label],
-    Type[Video],
 ]
 MEDIA_CLASS: Dict[str, Media] = {
     "album": Album,
@@ -79,7 +67,6 @@ MEDIA_CLASS: Dict[str, Media] = {
     "artist": Artist,
     "track": Track,
     "label": Label,
-    "video": Video,
 }
 
 DB_PATH_MAP = {"downloads": DB_PATH, "failed_downloads": FAILED_DB_PATH}
@@ -90,11 +77,7 @@ class RipCore(list):
     """RipCore."""
 
     clients = {
-        "qobuz": QobuzClient(),
-        "tidal": TidalClient(),
-        "deezer": DeezerClient(),
-        "soundcloud": SoundCloudClient(),
-        "deezloader": DeezloaderClient(),
+        "qobuz": QobuzClient()
     }
 
     def __init__(
@@ -154,21 +137,9 @@ class RipCore(list):
         else:
             raise Exception(f"Urls has invalid type {type(urls)}")
 
-        # youtube is handled by youtube-dl, so much of the
-        # processing is not necessary
-        youtube_urls = YOUTUBE_URL_REGEX.findall(url)
-        if youtube_urls != []:
-            self.extend(YoutubeVideo(u) for u in youtube_urls)
-
         parsed = self.parse_urls(url)
         if not parsed and len(self) == 0:
-            if "last.fm" in url:
-                message = (
-                    f"For last.fm urls, use the {style('lastfm', fg='yellow')} "
-                    f"command. See {style('rip lastfm --help', fg='yellow')}."
-                )
-            else:
-                message = f"Cannot find urls in text: {url}"
+            message = f"Cannot find urls in text: {url}"
 
             raise ParsingError(message)
 
@@ -193,10 +164,6 @@ class RipCore(list):
         :type item_id: str
         """
         client = self.get_client(source)
-
-        if media_type not in MEDIA_TYPES:
-            if "playlist" in media_type:  # for SoundCloud
-                media_type = "playlist"
 
         assert media_type in MEDIA_TYPES, media_type
         item = MEDIA_CLASS[media_type](client=client, id=item_id)
@@ -229,12 +196,7 @@ class RipCore(list):
             "concurrent_downloads": concurrency["enabled"],
             "max_connections": concurrency["max_connections"],
             "new_tracknumbers": metadata["new_playlist_tracknumbers"],
-            "download_videos": session["tidal"]["download_videos"],
             "download_booklets": session["qobuz"]["download_booklets"],
-            "download_youtube_videos": session["youtube"]["download_videos"],
-            "youtube_video_downloads_folder": session["youtube"][
-                "video_downloads_folder"
-            ],
             "add_singles_to_folder": filepaths["add_singles_to_folder"],
             "max_artwork_width": int(artwork["max_width"]),
             "max_artwork_height": int(artwork["max_height"]),
@@ -288,10 +250,6 @@ class RipCore(list):
                 arguments["parent_folder"] = self.__get_source_subdir(
                     item.client.source
                 )
-
-            if item is YoutubeVideo:
-                item.download(**arguments)
-                continue
 
             arguments["quality"] = self.config.session[item.client.source]["quality"]
             if isinstance(item, Artist):
@@ -355,10 +313,7 @@ class RipCore(list):
         """
         client = self.clients[source]
         if not client.logged_in:
-            try:
-                self.login(client)
-            except DeezloaderFallback:
-                client = self.clients["deezloader"]
+            self.login(client)
 
         return client
 
@@ -368,16 +323,6 @@ class RipCore(list):
         :param client:
         """
         creds = self.config.creds(client.source)
-        if client.source == "deezer" and creds["arl"] == "":
-            if self.config.session["deezer"]["deezloader_warnings"]:
-                secho(
-                    "Falling back to Deezloader (unstable). If you have a subscription, run ",
-                    nl=False,
-                    fg="yellow",
-                )
-                secho("rip config --deezer ", nl=False, bold=True)
-                secho("to log in.", fg="yellow")
-            raise DeezloaderFallback
 
         while True:
             try:
@@ -409,20 +354,6 @@ class RipCore(list):
                 self.config.file["qobuz"]["secrets"],
             ) = client.get_tokens()
             self.config.save()
-        elif (
-            client.source == "soundcloud"
-            and not creds.get("client_id")
-            and not creds.get("app_version")
-        ):
-            (
-                self.config.file["soundcloud"]["client_id"],
-                self.config.file["soundcloud"]["app_version"],
-            ) = client.get_tokens()
-            self.config.save()
-
-        elif client.source == "tidal":
-            self.config.file["tidal"].update(client.get_tokens())
-            self.config.save()  # only for the expiry stamp
 
     def parse_urls(self, url: str) -> List[Tuple[str, str, str]]:
         """Return the type of the url and the id.
@@ -431,9 +362,6 @@ class RipCore(list):
             https://www.qobuz.com/us-en/type/name/id
             https://open.qobuz.com/type/id
             https://play.qobuz.com/type/id
-
-            https://www.deezer.com/us/type/id
-            https://tidal.com/browse/type/id
 
         :raises exceptions.ParsingError:
         """
@@ -452,159 +380,9 @@ class RipCore(list):
             )
             url = QOBUZ_INTERPRETER_URL_REGEX.sub("", url)
 
-        dynamic_urls = DEEZER_DYNAMIC_LINK_REGEX.findall(url)
-        if dynamic_urls:
-            secho(
-                "Extracting IDs from Deezer dynamic link. Use urls "
-                "of the form https://www.deezer.com/{country}/{type}/{id} for "
-                "faster processing.",
-                fg="yellow",
-            )
-            parsed.extend(
-                ("deezer", *extract_deezer_dynamic_link(url)) for url in dynamic_urls
-            )
-
-        parsed.extend(URL_REGEX.findall(url))  # Qobuz, Tidal, Deezer
-        soundcloud_urls = SOUNDCLOUD_URL_REGEX.findall(url)
-
-        if soundcloud_urls:
-            soundcloud_client = self.get_client("soundcloud")
-            assert isinstance(soundcloud_client, SoundCloudClient)  # for typing
-
-            # TODO: Make this async
-            soundcloud_items = (
-                soundcloud_client.resolve_url(u) for u in soundcloud_urls
-            )
-
-            parsed.extend(
-                ("soundcloud", item["kind"], str(item["id"]))
-                for item in soundcloud_items
-            )
-
         logger.debug("Parsed urls: %s", parsed)
 
         return parsed
-
-    def handle_lastfm_urls(self, urls: str):
-        """Get info from lastfm url, and parse into Media objects.
-
-        This works by scraping the last.fm page and using a regex to
-        find the track titles and artists. The information is queried
-        in a Client.search(query, 'track') call and the first result is
-        used.
-
-        :param urls:
-        """
-        # Available keys: ['artist', 'title']
-        QUERY_FORMAT: Dict[str, str] = {
-            "tidal": "{title}",
-            "qobuz": "{title} {artist}",
-            "deezer": "{title} {artist}",
-            "soundcloud": "{title} {artist}",
-        }
-
-        # For testing:
-        # https://www.last.fm/user/nathan3895/playlists/12058911
-        user_regex = re.compile(r"https://www\.last\.fm/user/([^/]+)/playlists/\d+")
-        lastfm_urls = LASTFM_URL_REGEX.findall(urls)
-        try:
-            lastfm_source = self.config.session["lastfm"]["source"]
-            lastfm_fallback_source = self.config.session["lastfm"]["fallback_source"]
-        except KeyError:
-            self._config_updating_message()
-            self.config.update()
-            exit()
-        except Exception as err:
-            self._config_corrupted_message(err)
-            exit()
-
-        # Do not include tracks that have (re)mix, live, karaoke in their titles
-        # within parentheses or brackets
-        # This will match somthing like "Test (Person Remix]" though, so its not perfect
-        banned_words_plain = re.compile(r"(?i)(?:(?:re)?mix|live|karaoke)")
-        banned_words = re.compile(
-            r"(?i)[\(\[][^\)\]]*?(?:(?:re)?mix|live|karaoke)[^\)\]]*[\]\)]"
-        )
-
-        def search_query(title, artist, playlist) -> bool:
-            """Search for a query and add the first result to playlist.
-
-            :param query:
-            :type query: str
-            :param playlist:
-            :type playlist: Playlist
-            :rtype: bool
-            """
-
-            def try_search(source) -> Optional[Track]:
-                try:
-                    query = QUERY_FORMAT[lastfm_source].format(
-                        title=title, artist=artist
-                    )
-                    query_is_clean = banned_words_plain.search(query) is None
-
-                    search_results = self.search(source, query, media_type="track")
-                    track = next(search_results)
-
-                    if query_is_clean:
-                        while banned_words.search(track["title"]) is not None:
-                            logger.debug("Track title banned for query=%s", query)
-                            track = next(search_results)
-
-                    # Because the track is searched as a single we need to set
-                    # this manually
-                    track.part_of_tracklist = True
-                    return track
-                except (NoResultsFound, StopIteration):
-                    return None
-
-            track = try_search(lastfm_source) or try_search(lastfm_fallback_source)
-            if track is None:
-                return False
-
-            if self.config.session["metadata"]["set_playlist_to_album"]:
-                # so that the playlist name (actually the album) isn't
-                # amended to include version and work tags from individual tracks
-                track.meta.version = track.meta.work = None
-
-            playlist.append(track)
-            return True
-
-        from streamrip.utils import TQDM_BAR_FORMAT
-
-        for purl in lastfm_urls:
-            secho(f"Fetching playlist at {purl}", fg="blue")
-            title, queries = self.get_lastfm_playlist(purl)
-
-            pl = Playlist(client=self.get_client(lastfm_source), name=title)
-            creator_match = user_regex.search(purl)
-            if creator_match is not None:
-                pl.creator = creator_match.group(1)
-
-            tracks_not_found = 0
-            with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-                futures = [
-                    executor.submit(search_query, title, artist, pl)
-                    for title, artist in queries
-                ]
-                # only for the progress bar
-                for search_attempt in tqdm(
-                    concurrent.futures.as_completed(futures),
-                    unit="Tracks",
-                    dynamic_ncols=True,
-                    total=len(futures),
-                    desc="Searching...",
-                    bar_format=TQDM_BAR_FORMAT,
-                ):
-                    if not search_attempt.result():
-                        tracks_not_found += 1
-
-            pl.loaded = True
-
-            if tracks_not_found > 0:
-                secho(f"{tracks_not_found} tracks not found.", fg="yellow")
-
-            self.append(pl)
 
     def handle_txt(self, filepath: Union[str, os.PathLike]):
         """
@@ -641,11 +419,6 @@ class RipCore(list):
         logger.debug("searching for %s", query)
 
         client = self.get_client(source)
-
-        if isinstance(client, DeezloaderClient) and media_type == "featured":
-            raise IneligibleError(
-                "Must have premium Deezer account to access editorial lists."
-            )
 
         results = client.search(query, media_type)
 
@@ -803,70 +576,6 @@ class RipCore(list):
                         self.append(results[i])
                 return True
 
-    def get_lastfm_playlist(self, url: str) -> Tuple[str, list]:
-        """From a last.fm url, find the playlist title and tracks.
-
-        Each page contains 50 results, so `num_tracks // 50 + 1` requests
-        are sent per playlist.
-
-        :param url:
-        :type url: str
-        :rtype: Tuple[str, list]
-        """
-        logger.debug("Fetching lastfm playlist")
-
-        info = []
-        words = re.compile(r"[\w\s]+")
-        title_tags = re.compile(r'<a\s+href="[^"]+"\s+title="([^"]+)"')
-
-        def essence(s):
-            s = re.sub(r"&#\d+;", "", s)  # remove HTML entities
-            # TODO: change to finditer
-            return "".join(words.findall(s))
-
-        def get_titles(s):
-            titles = title_tags.findall(s)  # [2:]
-            for i in range(0, len(titles) - 1, 2):
-                info.append((essence(titles[i]), essence(titles[i + 1])))
-
-        r = requests.get(url)
-        get_titles(r.text)
-        remaining_tracks_match = re.search(
-            r'data-playlisting-entry-count="(\d+)"', r.text
-        )
-        if remaining_tracks_match is None:
-            raise ParsingError("Error parsing lastfm page: %s", r.text)
-
-        total_tracks = int(remaining_tracks_match.group(1))
-        logger.debug("Total tracks: %d", total_tracks)
-        remaining_tracks = total_tracks - 50
-
-        playlist_title_match = re.search(
-            r'<h1 class="playlisting-playlist-header-title">([^<]+)</h1>',
-            r.text,
-        )
-        if playlist_title_match is None:
-            raise ParsingError("Error finding title from response")
-
-        playlist_title = html.unescape(playlist_title_match.group(1))
-
-        if remaining_tracks > 0:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-                last_page = (
-                    1 + int(remaining_tracks // 50) + int(remaining_tracks % 50 != 0)
-                )
-                logger.debug("Fetching up to page %d", last_page)
-
-                futures = [
-                    executor.submit(requests.get, f"{url}?page={page}")
-                    for page in range(2, last_page + 1)
-                ]
-
-            for future in concurrent.futures.as_completed(futures):
-                get_titles(future.result().text)
-
-        return playlist_title, info
-
     def __get_source_subdir(self, source: str) -> str:
         path = self.config.session["downloads"]["folder"]
         return os.path.join(path, source.capitalize())
@@ -895,26 +604,6 @@ class RipCore(list):
                     getpass(prompt="").encode("utf-8")
                 ).hexdigest()
 
-            self.config.save()
-            secho(
-                f'Credentials saved to config file at "{self.config._path}"',
-                fg="green",
-            )
-        elif source == "deezer":
-            secho(
-                "If you're not sure how to find the ARL cookie, see the instructions at ",
-                italic=True,
-                nl=False,
-                dim=True,
-            )
-            secho(
-                "https://github.com/nathom/streamrip/wiki/Finding-your-Deezer-ARL-Cookie",
-                underline=True,
-                italic=True,
-                fg="blue",
-            )
-
-            self.config.file["deezer"]["arl"] = input(style("ARL: ", fg="green"))
             self.config.save()
             secho(
                 f'Credentials saved to config file at "{self.config._path}"',
