@@ -1819,9 +1819,39 @@ def _get_tracklist(resp: dict, source: str) -> list:
 
 
 def _quick_download(url: str, path: str, desc: str = None):
-    with open(path, "wb") as file:
-        for chunk in tqdm_stream(DownloadStream(url), desc=desc):
-            file.write(chunk)
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            stream = DownloadStream(url)
+            expected_size = len(stream)
+            with open(path, "wb") as file:
+                for chunk in tqdm_stream(stream, desc=desc):
+                    file.write(chunk)
+
+            # Post-download size validation
+            if expected_size > 0:
+                actual_size = os.path.getsize(path)
+                if actual_size < expected_size:
+                    raise NonStreamable(
+                        f"Incomplete download: got {actual_size} bytes, "
+                        f"expected {expected_size}"
+                    )
+            return
+        except NonStreamable:
+            # API-level errors should not be retried
+            raise
+        except Exception as e:
+            logger.warning(
+                "Download attempt %d/%d failed: %s", attempt, max_retries, e
+            )
+            if attempt < max_retries:
+                # Clean up partial file before retrying
+                if os.path.exists(path):
+                    os.remove(path)
+            else:
+                raise NonStreamable(
+                    f"Download failed after {max_retries} attempts: {e}"
+                )
 
 
 def _cover_download(url: str, path: str):

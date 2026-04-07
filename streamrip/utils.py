@@ -17,6 +17,7 @@ from click import secho, style
 from pathvalidate import sanitize_filename
 from requests.packages import urllib3
 from tqdm import tqdm
+from urllib3.util.retry import Retry
 
 from .constants import COVER_SIZES, MAX_FILES_OPEN
 from .exceptions import FfmpegError, InvalidQuality, InvalidSourceError
@@ -239,9 +240,21 @@ def gen_threadsafe_session(
     if headers is None:
         headers = {}
 
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+    )
+
     session = requests.Session()
-    adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=100,
+        pool_maxsize=100,
+        max_retries=retry_strategy,
+    )
     session.mount("https://", adapter)
+    session.mount("http://", adapter)
     session.headers.update(headers)
     return session
 

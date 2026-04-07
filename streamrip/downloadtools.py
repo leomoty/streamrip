@@ -1,20 +1,26 @@
 import asyncio
 import logging
 import os
+import time
 from tempfile import gettempdir
-from typing import Callable, Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, Iterator, List, Optional
 
 import aiofiles
 import aiohttp
+import requests.exceptions
 
 from .exceptions import NonStreamable
 from .utils import gen_threadsafe_session
 
 logger = logging.getLogger("streamrip")
 
+CHUNK_SIZE = 32768  # 32KB chunks for better throughput
+STREAM_RETRIES = 5
+STREAM_BACKOFF_FACTOR = 0.5
+
 
 class DownloadStream:
-    """An iterator over chunks of a stream.
+    """An iterator over chunks of a stream with retry and resume support.
 
     Usage:
 
@@ -47,17 +53,21 @@ class DownloadStream:
         :type item_id: str
         """
         self.source = source
+        self._url = url
+        self._headers = headers
+        self._params = params if params is not None else {}
         self.session = gen_threadsafe_session(headers=headers)
 
         self.id = item_id
         if isinstance(self.id, int):
             self.id = str(self.id)
 
-        if params is None:
-            params = {}
-
         self.request = self.session.get(
-            url, allow_redirects=True, stream=True, params=params
+            url,
+            allow_redirects=True,
+            stream=True,
+            params=self._params,
+            timeout=(10, 30),
         )
         self.file_size = int(self.request.headers.get("Content-Length", 0))
 
@@ -74,12 +84,75 @@ class DownloadStream:
             except json.JSONDecodeError:
                 raise NonStreamable("File not found.")
 
-    def __iter__(self) -> Iterable:
-        """Iterate through chunks of the stream.
+    def __iter__(self) -> Iterator[bytes]:
+        """Iterate through chunks of the stream with resume on failure.
 
-        :rtype: Iterable
+        :rtype: Iterator[bytes]
         """
-        return self.request.iter_content(chunk_size=1024)
+        downloaded = 0
+        retries_left = STREAM_RETRIES
+        response = self.request
+
+        while True:
+            try:
+                for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
+                    if chunk:
+                        downloaded += len(chunk)
+                        yield chunk
+                # Successfully finished
+                return
+            except (
+                requests.exceptions.ConnectionError,
+                requests.exceptions.ChunkedEncodingError,
+                requests.exceptions.Timeout,
+            ) as e:
+                retries_left -= 1
+                if retries_left <= 0:
+                    raise NonStreamable(
+                        f"Download failed after {STREAM_RETRIES} retries: {e}"
+                    )
+
+                wait = STREAM_BACKOFF_FACTOR * (2 ** (STREAM_RETRIES - retries_left - 1))
+                logger.warning(
+                    "Download interrupted at %d bytes, retrying in %.1fs (%d retries left): %s",
+                    downloaded,
+                    wait,
+                    retries_left,
+                    e,
+                )
+                time.sleep(wait)
+
+                # Try to resume with Range header
+                try:
+                    resume_headers = dict(self._headers or {})
+                    resume_headers["Range"] = f"bytes={downloaded}-"
+                    response = self.session.get(
+                        self._url,
+                        allow_redirects=True,
+                        stream=True,
+                        params=self._params,
+                        headers=resume_headers,
+                        timeout=(10, 30),
+                    )
+                    if response.status_code == 206:
+                        logger.info("Resumed download at byte %d", downloaded)
+                    elif response.status_code == 200:
+                        # Server doesn't support Range; restart from beginning
+                        logger.warning(
+                            "Server does not support Range requests, restarting download"
+                        )
+                        downloaded = 0
+                    else:
+                        raise NonStreamable(
+                            f"Unexpected status {response.status_code} on resume"
+                        )
+                except requests.exceptions.RequestException as re_err:
+                    retries_left -= 1
+                    if retries_left <= 0:
+                        raise NonStreamable(
+                            f"Failed to reconnect after {STREAM_RETRIES} retries: {re_err}"
+                        )
+                    logger.warning("Reconnection failed: %s", re_err)
 
     @property
     def url(self):
@@ -131,10 +204,26 @@ class DownloadPool:
     async def _download_url(self, session, url):
         filename = await self.getfn(url)
         logger.debug("Downloading %s", url)
-        async with session.get(url) as response, aiofiles.open(filename, "wb") as f:
-            # without aiofiles     3.6632679780000004s
-            # with    aiofiles     2.504482839s
-            await f.write(await response.content.read())
+        timeout = aiohttp.ClientTimeout(total=120, sock_read=60)
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with session.get(url, timeout=timeout) as response, aiofiles.open(
+                    filename, "wb"
+                ) as f:
+                    await f.write(await response.content.read())
+                break
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logger.warning(
+                    "Cover download attempt %d/%d failed for %s: %s",
+                    attempt,
+                    max_retries,
+                    url,
+                    e,
+                )
+                if attempt == max_retries:
+                    logger.error("Giving up on cover download: %s", url)
+                    return
 
         if self.callback:
             self.callback()
