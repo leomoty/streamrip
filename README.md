@@ -51,7 +51,8 @@ To grab these values follow these steps:
 1) Open a browser and navigate to play.qobuz.com and login.
 2) Open the Web Developer Tools and the network tab.
 3) Reload the page and filter for "login", now check the response and look for `id` (this numeric string is your Qobuz user ID), and `user_auth_token`.
-4) Open the Streamrip config by running `rip config --open`, find `[qobuz]` and add the `id` as `email_or_userid` and the `user_auth_token` as the `password_or_token`.
+4) Open the Streamrip config by running `rip config open`, find `[qobuz]` and add the `id` as `email_or_userid` and the `user_auth_token` as the `password_or_token`.
+5) When using auth token, `use_auth_token` must be set to true. 
 
 This token will at expire at some point, when this happens, grab a new one and repeat the steps above.
 
